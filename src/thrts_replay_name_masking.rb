@@ -10,7 +10,8 @@ require 'stringio'
 
 DEBUG = true
 SCRIPT_NAME = "とうほう☆ストラテジー(ver.1.37-) リプレイファイル プレイヤー名マスキングツール"
-REVISION = 20130117
+REVISION = 20130118
+MIN_VALID_VERSION = 5137
 
 # GZIP マジックナンバー
 GZIP_IDENTIFIER = "\x1F\x8B".force_encoding('ASCII-8BIT')
@@ -77,42 +78,43 @@ end
 
 # プレイヤー情報取得
 def get_players_info(header)
+  offset = nil
+  player_num = nil
   names_data = []
   names_plus_length_data = []
   twitter_ids = []
   screen_names = []
   icon_urls = []
   
-  headers = []
-  game_data = nil
-  players_data = []
-  
-  headers = header.split(HEADER_SEPARATOR)
-  game_data = headers.shift
-  players_data = headers
-  
+  ## ゲーム情報部分
+  # マップクラスパス読み飛ばし
+  offset, = get_offset_data(header, OFFSET_MAP_CLASSPATH)
   # プレイヤー数取得
-  puts "プレイヤー数 #{players_data.length}"
+  player_num = header[offset..(offset + 3)].unpack('I')[0]
+  offset += 4
+  puts "プレイヤー数 #{player_num}"
   
-  # ヘッダからプレイヤー名取得
-  players_data.each do |player_data|
+  ## プレイヤー情報部分
+  player_num.times do
+    # 謎の4バイト読み飛ばし
+    offset += 0x04
     # プレイヤー名取得
-    offset_faction, name = get_offset_data(player_data, 0)
+    offset_faction, name = get_offset_data(header, offset)
     names_data << name
-    names_plus_length_data << player_data[0..(offset_faction - 1)]
+    names_plus_length_data << header[offset..(offset_faction - 1)]
     # 勢力読み飛ばし
-    offset_bomb, = get_offset_data(player_data, offset_faction)
+    offset_bomb, = get_offset_data(header, offset_faction)
     offset_bomb += 0x04 # 謎の4バイトがある
     # ボム読み飛ばし
     3.times do
-      offset_bomb, = get_offset_data(player_data, offset_bomb)
+      offset_bomb, = get_offset_data(header, offset_bomb)
     end
-    offset_twitter_id = offset_bomb + 0x02 # 謎の2バイトがある
+    # 謎の2バイト読み飛ばし
+    offset_twitter_id = offset_bomb + 0x02 
     # twitter 情報取得
-    # なければ "" がはいっている予定
-    offset_screen_name, twitter_id = get_offset_data(player_data, offset_twitter_id)
-    offset_icon_url, screen_name = get_offset_data(player_data, offset_screen_name)
-    offset_end, icon_url = get_offset_data(player_data, offset_icon_url)
+    offset_screen_name, twitter_id = get_offset_data(header, offset_twitter_id)
+    offset_icon_url, screen_name = get_offset_data(header, offset_screen_name)
+    offset_end, icon_url = get_offset_data(header, offset_icon_url)
     twitter_ids << twitter_id
     screen_names << screen_name
     icon_urls << icon_url
@@ -121,6 +123,7 @@ def get_players_info(header)
     print " #{screen_name.unpack('a*')[0].encode('Windows-31J', 'UTF-16LE')} " if DEBUG 
     print " #{icon_url.unpack('a*')[0].encode('Windows-31J', 'UTF-16LE')} " if DEBUG 
     puts
+    offset = offset_end
   end
   
   [names_data, names_plus_length_data, twitter_ids, screen_names, icon_urls]
@@ -160,6 +163,11 @@ puts dst_path
 puts "変換元リプレイファイル読み込み..."
 src_data = load_replay_data(src_path)
 header = src_data[:header]
+
+# ヘッダからバージョン情報を取得
+version = get_version(header).encode('Windows-31J', 'UTF-16LE')
+puts "本体バージョン文字列: #{version} (Ver.#{version[1]}.#{version[2..3]})"
+puts "！警告：リプレイのバージョンが未対応です。続行しますが成功しない可能性大です。" if version.to_i < MIN_VALID_VERSION
 
 # ヘッダからプレイヤー情報取得
 puts "プレイヤー情報取得..."
