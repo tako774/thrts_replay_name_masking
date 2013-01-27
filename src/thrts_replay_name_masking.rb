@@ -9,9 +9,9 @@ require 'zlib'
 require 'stringio'
 
 DEBUG = true
-SCRIPT_NAME = "とうほう☆ストラテジー(ver.1.37-) リプレイファイル プレイヤー名マスキングツール"
-REVISION = 20130118
-MIN_VALID_VERSION = 5137
+SCRIPT_NAME = "とうほう☆ストラテジー(ver.1.44-) リプレイファイル プレイヤー名マスキングツール"
+REVISION = 20130127
+MIN_VALID_VERSION = 5144
 
 # GZIP マジックナンバー
 GZIP_IDENTIFIER = "\x1F\x8B".force_encoding('ASCII-8BIT')
@@ -36,6 +36,7 @@ names_plus_length_data = [] # 名前の長さデータ4バイトを先頭につ�
 twitter_ids = []
 screen_names = []
 icon_urls = []
+ranks = []
 header = nil    # ヘッダ
 version = nil # バージョン数字
 
@@ -66,6 +67,7 @@ end
 # 先頭5バイト目から取得した長さ分のデータを取得し返す
 # また、offset として 4 + 長さ分すすめた offset を返す
 def get_offset_data(data, offset)
+  # puts offset.to_s(16)
   length = data[offset..offset + 3].unpack('I')[0]
   [offset + 4 + length, data[(offset + 4)..(offset + 4 + length - 1)]]
 end
@@ -85,6 +87,7 @@ def get_players_info(header)
   twitter_ids = []
   screen_names = []
   icon_urls = []
+  ranks = []
   
   ## ゲーム情報部分
   # マップクラスパス読み飛ばし
@@ -96,37 +99,52 @@ def get_players_info(header)
   
   ## プレイヤー情報部分
   player_num.times do
-    # 謎の4バイト読み飛ばし
-    offset += 0x04
+    is_com = false
+    
+    # プレイヤー順序番号読み飛ばし
+    offset += 4
     # プレイヤー名取得
     offset_faction, name = get_offset_data(header, offset)
     names_data << name
     names_plus_length_data << header[offset..(offset_faction - 1)]
     # 勢力読み飛ばし
-    offset_bomb, = get_offset_data(header, offset_faction)
-    offset_bomb += 0x04 # 謎の4バイトがある
+    offset_team_id, = get_offset_data(header, offset_faction)
+    # チーム番号読み飛ばし
+    offset_bomb = offset_team_id + 4
     # ボム読み飛ばし
     3.times do
       offset_bomb, = get_offset_data(header, offset_bomb)
     end
-    # 謎の2バイト読み飛ばし
-    offset_twitter_id = offset_bomb + 0x02 
+    offset_is_com = offset_bomb
+    # COM かどうか
+    is_com = header[offset_is_com] == "\x01" ? true : false 
+    offset_is_observer = offset_is_com + 1
+    # 観戦者かどうか読み飛ばし
+    offset_twitter_id = offset_is_observer + 1
     # twitter 情報取得
     offset_screen_name, twitter_id = get_offset_data(header, offset_twitter_id)
     offset_icon_url, screen_name = get_offset_data(header, offset_screen_name)
-    offset_end, icon_url = get_offset_data(header, offset_icon_url)
+    offset_rank, icon_url = get_offset_data(header, offset_icon_url)
     twitter_ids << twitter_id
     screen_names << screen_name
     icon_urls << icon_url
-    print " #{name.unpack('a*')[0].encode('Windows-31J', 'UTF-16LE')} " if DEBUG 
-    print " #{twitter_id.unpack('a*')[0].encode('Windows-31J', 'UTF-16LE')} " if DEBUG 
-    print " #{screen_name.unpack('a*')[0].encode('Windows-31J', 'UTF-16LE')} " if DEBUG 
-    print " #{icon_url.unpack('a*')[0].encode('Windows-31J', 'UTF-16LE')} " if DEBUG 
+    # ランク情報取得
+    offset, rank = get_offset_data(header, offset_rank)
+    ranks << rank
+    
+    if is_com then
+      print " [ COM ]" if DEBUG 
+    else
+      print " #{name.unpack('a*')[0].encode('Windows-31J', 'UTF-16LE')} " if DEBUG 
+      print " #{twitter_id.unpack('a*')[0].encode('Windows-31J', 'UTF-16LE')} " if DEBUG 
+      print " #{screen_name.unpack('a*')[0].encode('Windows-31J', 'UTF-16LE')} " if DEBUG 
+      print " #{icon_url.unpack('a*')[0].encode('Windows-31J', 'UTF-16LE')} " if DEBUG 
+      print " #{rank.unpack('a*')[0].encode('Windows-31J', 'UTF-16LE')} " if DEBUG 
+    end
     puts
-    offset = offset_end
   end
   
-  [names_data, names_plus_length_data, twitter_ids, screen_names, icon_urls]
+  [names_data, names_plus_length_data, twitter_ids, screen_names, icon_urls, ranks]
 end
 
 def print_usage
@@ -171,7 +189,7 @@ puts "！警告：リプレイのバージョンが未対応です。続行し�
 
 # ヘッダからプレイヤー情報取得
 puts "プレイヤー情報取得..."
-names_data, names_plus_length_data, twitter_ids, screen_names, icon_urls = get_players_info(header)
+names_data, names_plus_length_data, twitter_ids, screen_names, icon_urls, ranks = get_players_info(header)
 
 # ヘッダのプレイヤー名をマスキング
 puts "選択画面プレイヤー名マスキング..."
@@ -205,7 +223,7 @@ end.each do |name_data_utf8|
 end
 
 # ヘッダの twitter 情報をマスキング
-puts "twitter 情報をマスキング"
+puts "twitter 情報をマスキング..."
 (twitter_ids + screen_names + icon_urls).each do |tw_str|
   header.sub!(tw_str, MASK_FILLER * (tw_str.length / MASK_FILLER.length)) if tw_str != ""
   body_header.sub!(tw_str, MASK_FILLER * (tw_str.length / MASK_FILLER.length)) if tw_str != ""
@@ -215,6 +233,13 @@ end
   tw_str.encode('UTF-8', 'UTF-16LE').force_encoding('ASCII-8BIT')
 end.each do |tw_str_utf8|
   body_body.gsub!(tw_str_utf8, MASK_FILLER_UTF8 * (tw_str_utf8.length / MASK_FILLER_UTF8.length))
+end
+
+# ヘッダのランク情報をマスキング
+puts "ランク情報をマスキング..."
+ranks.each do |rank|
+  header.sub!(rank, MASK_FILLER * (rank.length / MASK_FILLER.length)) if rank != ""
+  body_header.sub!(rank, MASK_FILLER * (rank.length / MASK_FILLER.length)) if rank != ""
 end
 
 body = body_header + body_body
